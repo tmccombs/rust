@@ -202,7 +202,6 @@ pub struct ModuleTranslation {
     /// something unique to this crate (e.g., a module path) as well
     /// as the crate name and disambiguator.
     name: String,
-    symbol_name_hash: u64,
     pub source: ModuleSource,
     pub kind: ModuleKind,
 }
@@ -224,7 +223,6 @@ impl ModuleTranslation {
         CompiledModule {
             name: self.name.clone(),
             kind: self.kind,
-            symbol_name_hash: self.symbol_name_hash,
             pre_existing,
             emit_obj,
             emit_bc,
@@ -252,7 +250,6 @@ impl Drop for ModuleTranslation {
 pub struct CompiledModule {
     pub name: String,
     pub kind: ModuleKind,
-    pub symbol_name_hash: u64,
     pub pre_existing: bool,
     pub emit_obj: bool,
     pub emit_bc: bool,
