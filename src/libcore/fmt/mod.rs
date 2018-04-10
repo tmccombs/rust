@@ -27,16 +27,14 @@ mod builders;
 
 #[unstable(feature = "fmt_flags_align", issue = "27726")]
 /// Possible alignments returned by `Formatter::align`
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Alignment {
     /// Indication that contents should be left-aligned.
     Left,
     /// Indication that contents should be right-aligned.
     Right,
     /// Indication that contents should be center-aligned.
-    Center,
-    /// No alignment was requested.
-    Unknown,
+    Center
 }
 
 #[stable(feature = "debug_builders", since = "1.2.0")]
@@ -1385,14 +1383,13 @@ impl<'a> Formatter<'a> {
     pub fn fill(&self) -> char { self.fill }
 
     /// Flag indicating what form of alignment was requested
-    #[unstable(feature = "fmt_flags_align", reason = "method was just created",
-               issue = "27726")]
-    pub fn align(&self) -> Alignment {
+    #[stable(feature = "fmt_flags_align", since = "1.27.0")]
+    pub fn align(&self) -> Option<Alignment> {
         match self.align {
-            rt::v1::Alignment::Left => Alignment::Left,
-            rt::v1::Alignment::Right => Alignment::Right,
-            rt::v1::Alignment::Center => Alignment::Center,
-            rt::v1::Alignment::Unknown => Alignment::Unknown,
+            rt::v1::Alignment::Left => Some(Alignment::Left),
+            rt::v1::Alignment::Right => Some(Alignment::Right),
+            rt::v1::Alignment::Center => Some(Alignment::Center),
+            rt::v1::Alignment::Unknown => None,
         }
     }
 
