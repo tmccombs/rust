@@ -2,7 +2,7 @@
 
 //! Hints to compiler that affects how code should be emitted or optimized.
 
-use intrinsics;
+use crate::intrinsics;
 
 /// Informs the compiler that this point in the code is not reachable, enabling
 /// further optimizations.
@@ -21,11 +21,10 @@ use intrinsics;
 /// difficult-to-debug problems.
 ///
 /// Use this function only when you can prove that the code will never call it.
+/// Otherwise, consider using the [`unreachable!`] macro, which does not allow
+/// optimizations but will panic when executed.
 ///
-/// The [`unreachable!()`] macro is the safe counterpart of this function, which
-/// will panic instead when executed.
-///
-/// [`unreachable!()`]: ../macro.unreachable.html
+/// [`unreachable!`]: ../macro.unreachable.html
 ///
 /// # Example
 ///
@@ -50,15 +49,28 @@ pub unsafe fn unreachable_unchecked() -> ! {
     intrinsics::unreachable()
 }
 
-/// Save power or switch hyperthreads in a busy-wait spin-loop.
+/// Signals the processor that it is entering a busy-wait spin-loop.
 ///
-/// This function is deliberately more primitive than
-/// [`std::thread::yield_now`](../../std/thread/fn.yield_now.html) and
-/// does not directly yield to the system's scheduler.
-/// In some cases it might be useful to use a combination of both functions.
-/// Careful benchmarking is advised.
+/// Upon receiving spin-loop signal the processor can optimize its behavior by, for example, saving
+/// power or switching hyper-threads.
 ///
-/// On some platforms this function may not do anything at all.
+/// This function is different than [`std::thread::yield_now`] which directly yields to the
+/// system's scheduler, whereas `spin_loop` only signals the processor that it is entering a
+/// busy-wait spin-loop without yielding control to the system's scheduler.
+///
+/// Using a busy-wait spin-loop with `spin_loop` is ideally used in situations where a
+/// contended lock is held by another thread executed on a different CPU and where the waiting
+/// times are relatively small. Because entering busy-wait spin-loop does not trigger the system's
+/// scheduler, no overhead for switching threads occurs. However, if the thread holding the
+/// contended lock is running on the same CPU, the spin-loop is likely to occupy an entire CPU slice
+/// before switching to the thread that holds the lock. If the contending lock is held by a thread
+/// on the same CPU or if the waiting times for acquiring the lock are longer, it is often better to
+/// use [`std::thread::yield_now`].
+///
+/// **Note**: On platforms that do not support receiving spin-loop hints this function does not
+/// do anything at all.
+///
+/// [`std::thread::yield_now`]: ../../std/thread/fn.yield_now.html
 #[inline]
 #[unstable(feature = "renamed_spin_loop", issue = "55002")]
 pub fn spin_loop() {
@@ -92,38 +104,46 @@ pub fn spin_loop() {
     }
 }
 
-/// A function that is opaque to the optimizer, to allow benchmarks to
-/// pretend to use outputs to assist in avoiding dead-code
-/// elimination.
+/// An identity function that *__hints__* to the compiler to be maximally pessimistic about what
+/// `black_box` could do.
 ///
-/// This function is a no-op, and does not even read from `dummy`.
+/// [`std::convert::identity`]: https://doc.rust-lang.org/core/convert/fn.identity.html
+///
+/// Unlike [`std::convert::identity`], a Rust compiler is encouraged to assume that `black_box` can
+/// use `x` in any possible valid way that Rust code is allowed to without introducing undefined
+/// behavior in the calling code. This property makes `black_box` useful for writing code in which
+/// certain optimizations are not desired, such as benchmarks.
+///
+/// Note however, that `black_box` is only (and can only be) provided on a "best-effort" basis. The
+/// extent to which it can block optimisations may vary depending upon the platform and code-gen
+/// backend used. Programs cannot rely on `black_box` for *correctness* in any way.
 #[inline]
-#[unstable(feature = "test", issue = "27812")]
+#[unstable(feature = "test", issue = "50297")]
+#[allow(unreachable_code)] // this makes #[cfg] a bit easier below.
 pub fn black_box<T>(dummy: T) -> T {
-    cfg_if! {
-        if #[cfg(any(
-            target_arch = "asmjs",
-            all(
-                target_arch = "wasm32",
-                target_os = "emscripten"
-            )
-        ))] {
-            #[inline]
-            unsafe fn black_box_impl<T>(d: T) -> T {
-                // these targets do not support inline assembly
-                let ret = crate::ptr::read_volatile(&d);
-                crate::mem::forget(d);
-                ret
-            }
-        } else {
-            #[inline]
-            unsafe fn black_box_impl<T>(d: T) -> T {
-                // we need to "use" the argument in some way LLVM can't
-                // introspect.
-                asm!("" : : "r"(&d));
-                d
-            }
-        }
+    // We need to "use" the argument in some way LLVM can't introspect, and on
+    // targets that support it we can typically leverage inline assembly to do
+    // this. LLVM's intepretation of inline assembly is that it's, well, a black
+    // box. This isn't the greatest implementation since it probably deoptimizes
+    // more than we want, but it's so far good enough.
+    #[cfg(not(any(
+        target_arch = "asmjs",
+        all(
+            target_arch = "wasm32",
+            target_os = "emscripten"
+        )
+    )))]
+    unsafe {
+        asm!("" : : "r"(&dummy));
+        return dummy;
     }
-    unsafe { black_box_impl(dummy) }
+
+    // Not all platforms support inline assembly so try to do something without
+    // inline assembly which in theory still hinders at least some optimizations
+    // on those targets. This is the "best effort" scenario.
+    unsafe {
+        let ret = crate::ptr::read_volatile(&dummy);
+        crate::mem::forget(dummy);
+        ret
+    }
 }

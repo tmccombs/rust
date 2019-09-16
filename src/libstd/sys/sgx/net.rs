@@ -1,5 +1,5 @@
 use crate::fmt;
-use crate::io::{self, IoVec, IoVecMut};
+use crate::io::{self, IoSlice, IoSliceMut};
 use crate::net::{SocketAddr, Shutdown, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 use crate::time::Duration;
 use crate::sys::{unsupported, Void, sgx_ineffective, AsInner, FromInner, IntoInner, TryIntoInner};
@@ -48,7 +48,7 @@ pub struct TcpStream {
 }
 
 impl fmt::Debug for TcpStream {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut res = f.debug_struct("TcpStream");
 
         if let Some(ref addr) = self.inner.local_addr {
@@ -136,16 +136,16 @@ impl TcpStream {
         self.inner.inner.read(buf)
     }
 
-    pub fn read_vectored(&self, bufs: &mut [IoVecMut<'_>]) -> io::Result<usize> {
-        io::default_read_vectored(|b| self.read(b), bufs)
+    pub fn read_vectored(&self, bufs: &mut [IoSliceMut<'_>]) -> io::Result<usize> {
+        self.inner.inner.read_vectored(bufs)
     }
 
     pub fn write(&self, buf: &[u8]) -> io::Result<usize> {
         self.inner.inner.write(buf)
     }
 
-    pub fn write_vectored(&self, bufs: &[IoVec<'_>]) -> io::Result<usize> {
-        io::default_write_vectored(|b| self.write(b), bufs)
+    pub fn write_vectored(&self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
+        self.inner.inner.write_vectored(bufs)
     }
 
     pub fn peer_addr(&self) -> io::Result<SocketAddr> {
@@ -213,7 +213,7 @@ pub struct TcpListener {
 }
 
 impl fmt::Debug for TcpListener {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut res = f.debug_struct("TcpListener");
 
         if let Some(ref addr) = self.inner.local_addr {
@@ -421,7 +421,7 @@ impl UdpSocket {
 }
 
 impl fmt::Debug for UdpSocket {
-    fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.0 {}
     }
 }
@@ -438,7 +438,7 @@ impl error::Error for NonIpSockAddr {
 }
 
 impl fmt::Display for NonIpSockAddr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Failed to convert address to SocketAddr: {}", self.host)
     }
 }

@@ -3,6 +3,8 @@ warning: the feature `generic_associated_types` is incomplete and may cause the 
    |
 LL | #![feature(generic_associated_types)]
    |            ^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(incomplete_features)]` on by default
 
 error[E0261]: use of undeclared lifetime name `'b`
   --> $DIR/generic_associated_type_undeclared_lifetimes.rs:13:37
@@ -36,5 +38,5 @@ LL |     fn iter<'a>(&'a self) -> Self::Iter<'undeclared>;
 
 error: aborting due to 5 previous errors
 
-Some errors occurred: E0109, E0261.
+Some errors have detailed explanations: E0109, E0261.
 For more information about an error, try `rustc --explain E0109`.

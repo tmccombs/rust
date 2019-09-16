@@ -1,6 +1,7 @@
 // assembly-output: ptx-linker
 // compile-flags: --crate-type cdylib
 // only-nvptx64
+// ignore-nvptx64
 
 #![feature(abi_ptx)]
 #![no_std]
@@ -24,4 +25,3 @@ pub unsafe extern "ptx-kernel" fn top_kernel(a: *const u32, b: *mut u32) {
 // Verify that no extra function definitions are here.
 // CHECK-NOT: .func
 // CHECK-NOT: .entry
-

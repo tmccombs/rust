@@ -20,31 +20,29 @@ use rustc::ty::subst::{SubstsRef, UnpackedKind};
 use crate::abi::Abi;
 use crate::common::CodegenCx;
 use crate::builder::Builder;
-use crate::monomorphize::Instance;
 use crate::value::Value;
-use rustc::ty::{self, ParamEnv, Ty, InstanceDef};
+use rustc::ty::{self, ParamEnv, Ty, InstanceDef, Instance};
 use rustc::mir;
 use rustc::session::config::{self, DebugInfo};
 use rustc::util::nodemap::{DefIdMap, FxHashMap, FxHashSet};
 use rustc_data_structures::small_c_str::SmallCStr;
 use rustc_data_structures::indexed_vec::IndexVec;
 use rustc_codegen_ssa::debuginfo::{FunctionDebugContext, MirDebugScope, VariableAccess,
-    VariableKind, FunctionDebugContextData};
+    VariableKind, FunctionDebugContextData, type_names};
 
 use libc::c_uint;
 use std::cell::RefCell;
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 
 use syntax_pos::{self, Span, Pos};
 use syntax::ast;
-use syntax::symbol::{Symbol, InternedString};
+use syntax::symbol::InternedString;
 use rustc::ty::layout::{self, LayoutOf, HasTyCtxt};
 use rustc_codegen_ssa::traits::*;
 
 pub mod gdb;
 mod utils;
 mod namespace;
-mod type_names;
 pub mod metadata;
 mod create_scope_map;
 mod source_loc;
@@ -64,7 +62,7 @@ pub struct CrateDebugContext<'a, 'tcx> {
     llcontext: &'a llvm::Context,
     llmod: &'a llvm::Module,
     builder: &'a mut DIBuilder<'a>,
-    created_files: RefCell<FxHashMap<(Symbol, Symbol), &'a DIFile>>,
+    created_files: RefCell<FxHashMap<(Option<String>, Option<String>), &'a DIFile>>,
     created_enum_disr_types: RefCell<FxHashMap<(DefId, layout::Primitive), &'a DIType>>,
 
     type_map: RefCell<TypeMap<'a, 'tcx>>,
@@ -226,8 +224,37 @@ impl DebugInfoBuilderMethods<'tcx> for Builder<'a, 'll, 'tcx> {
         gdb::insert_reference_to_gdb_debug_scripts_section_global(self)
     }
 
-    fn set_value_name(&mut self, value: &'ll Value, name: &str) {
-        let cname = SmallCStr::new(name);
+    fn set_var_name(&mut self, value: &'ll Value, name: impl ToString) {
+        // Avoid wasting time if LLVM value names aren't even enabled.
+        if self.sess().fewer_names() {
+            return;
+        }
+
+        // Only function parameters and instructions are local to a function,
+        // don't change the name of anything else (e.g. globals).
+        let param_or_inst = unsafe {
+            llvm::LLVMIsAArgument(value).is_some() ||
+            llvm::LLVMIsAInstruction(value).is_some()
+        };
+        if !param_or_inst {
+            return;
+        }
+
+        let old_name = unsafe {
+            CStr::from_ptr(llvm::LLVMGetValueName(value))
+        };
+        match old_name.to_str() {
+            Ok("") => {}
+            Ok(_) => {
+                // Avoid replacing the name if it already exists.
+                // While we could combine the names somehow, it'd
+                // get noisy quick, and the usefulness is dubious.
+                return;
+            }
+            Err(_) => return,
+        }
+
+        let cname = CString::new(name.to_string()).unwrap();
         unsafe {
             llvm::LLVMSetValueName(value, cname.as_ptr());
         }
@@ -240,7 +267,7 @@ impl DebugInfoMethods<'tcx> for CodegenCx<'ll, 'tcx> {
         instance: Instance<'tcx>,
         sig: ty::FnSig<'tcx>,
         llfn: &'ll Value,
-        mir: &mir::Mir<'_>,
+        mir: &mir::Body<'_>,
     ) -> FunctionDebugContext<&'ll DISubprogram> {
         if self.sess().opts.debuginfo == DebugInfo::None {
             return FunctionDebugContext::DebugInfoDisabled;
@@ -292,15 +319,9 @@ impl DebugInfoMethods<'tcx> for CodegenCx<'ll, 'tcx> {
         let scope_line = span_start(self, span).line;
 
         let function_name = CString::new(name).unwrap();
-        let linkage_name = SmallCStr::new(&linkage_name.as_str());
+        let linkage_name = SmallCStr::new(&linkage_name.name.as_str());
 
         let mut flags = DIFlags::FlagPrototyped;
-
-        if let Some((id, _)) = self.tcx.entry_fn(LOCAL_CRATE) {
-            if id == def_id {
-                flags |= DIFlags::FlagMainSubprogram;
-            }
-        }
 
         if self.layout_of(sig.output()).abi.is_uninhabited() {
             flags |= DIFlags::FlagNoReturn;
@@ -312,6 +333,11 @@ impl DebugInfoMethods<'tcx> for CodegenCx<'ll, 'tcx> {
         }
         if self.sess().opts.optimize != config::OptLevel::No {
             spflags |= DISPFlags::SPFlagOptimized;
+        }
+        if let Some((id, _)) = self.tcx.entry_fn(LOCAL_CRATE) {
+            if id == def_id {
+                spflags |= DISPFlags::SPFlagMainSubprogram;
+            }
         }
 
         let fn_metadata = unsafe {
@@ -394,7 +420,7 @@ impl DebugInfoMethods<'tcx> for CodegenCx<'ll, 'tcx> {
                 if let ty::Tuple(args) = sig.inputs()[sig.inputs().len() - 1].sty {
                     signature.extend(
                         args.iter().map(|argument_type| {
-                            Some(type_metadata(cx, argument_type, syntax_pos::DUMMY_SP))
+                            Some(type_metadata(cx, argument_type.expect_ty(), syntax_pos::DUMMY_SP))
                         })
                     );
                 }
@@ -423,7 +449,7 @@ impl DebugInfoMethods<'tcx> for CodegenCx<'ll, 'tcx> {
                 let actual_type =
                     cx.tcx.normalize_erasing_regions(ParamEnv::reveal_all(), actual_type);
                 // Add actual type name to <...> clause of function name
-                let actual_type_name = compute_debuginfo_type_name(cx,
+                let actual_type_name = compute_debuginfo_type_name(cx.tcx(),
                                                                    actual_type,
                                                                    true);
                 name_to_append_suffix_to.push_str(&actual_type_name[..]);
@@ -525,7 +551,7 @@ impl DebugInfoMethods<'tcx> for CodegenCx<'ll, 'tcx> {
 
     fn create_mir_scopes(
         &self,
-        mir: &mir::Mir<'_>,
+        mir: &mir::Body<'_>,
         debug_context: &mut FunctionDebugContext<&'ll DISubprogram>,
     ) -> IndexVec<mir::SourceScope, MirDebugScope<&'ll DIScope>> {
         create_scope_map::create_mir_scopes(self, mir, debug_context)
@@ -544,7 +570,7 @@ impl DebugInfoMethods<'tcx> for CodegenCx<'ll, 'tcx> {
         finalize(self)
     }
 
-    fn debuginfo_upvar_decls_ops_sequence(&self, byte_offset_of_var_in_env: u64) -> [i64; 4] {
+    fn debuginfo_upvar_ops_sequence(&self, byte_offset_of_var_in_env: u64) -> [i64; 4] {
         unsafe {
             [llvm::LLVMRustDIBuilderCreateOpDeref(),
              llvm::LLVMRustDIBuilderCreateOpPlusUconst(),

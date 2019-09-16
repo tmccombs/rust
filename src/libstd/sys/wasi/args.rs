@@ -1,30 +1,14 @@
-use crate::any::Any;
-use crate::ffi::CStr;
 use crate::ffi::OsString;
 use crate::marker::PhantomData;
 use crate::os::wasi::ffi::OsStringExt;
-use crate::ptr;
 use crate::vec;
 
-static mut ARGC: isize = 0;
-static mut ARGV: *const *const u8 = ptr::null();
+use ::wasi::wasi_unstable as wasi;
 
-#[cfg(not(target_feature = "atomics"))]
-pub unsafe fn args_lock() -> impl Any {
-    // No need for a lock if we're single-threaded, but this function will need
-    // to get implemented for multi-threaded scenarios
-}
-
-pub unsafe fn init(argc: isize, argv: *const *const u8) {
-    let _guard = args_lock();
-    ARGC = argc;
-    ARGV = argv;
+pub unsafe fn init(_argc: isize, _argv: *const *const u8) {
 }
 
 pub unsafe fn cleanup() {
-    let _guard = args_lock();
-    ARGC = 0;
-    ARGV = ptr::null();
 }
 
 pub struct Args {
@@ -34,18 +18,17 @@ pub struct Args {
 
 /// Returns the command line arguments
 pub fn args() -> Args {
-    unsafe {
-        let _guard = args_lock();
-        let args = (0..ARGC)
-            .map(|i| {
-                let cstr = CStr::from_ptr(*ARGV.offset(i) as *const libc::c_char);
-                OsStringExt::from_vec(cstr.to_bytes().to_vec())
-            })
-            .collect::<Vec<_>>();
-        Args {
-            iter: args.into_iter(),
-            _dont_send_or_sync_me: PhantomData,
-        }
+    let buf = wasi::args_sizes_get().and_then(|args_sizes| {
+        let mut buf = Vec::with_capacity(args_sizes.get_count());
+        wasi::args_get(args_sizes, |arg| {
+            let arg = OsString::from_vec(arg.to_vec());
+            buf.push(arg);
+        })?;
+        Ok(buf)
+    }).unwrap_or(vec![]);
+    Args {
+        iter: buf.into_iter(),
+        _dont_send_or_sync_me: PhantomData
     }
 }
 

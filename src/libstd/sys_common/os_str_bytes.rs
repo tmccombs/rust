@@ -18,30 +18,36 @@ pub(crate) struct Buf {
     pub inner: Vec<u8>
 }
 
+// FIXME:
+// `Buf::as_slice` current implementation relies
+// on `Slice` being layout-compatible with `[u8]`.
+// When attribute privacy is implemented, `Slice` should be annotated as `#[repr(transparent)]`.
+// Anyway, `Slice` representation and layout are considered implementation detail, are
+// not documented and must not be relied upon.
 pub(crate) struct Slice {
     pub inner: [u8]
 }
 
 impl fmt::Debug for Slice {
-    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         debug_fmt_bytestring(&self.inner, formatter)
     }
 }
 
 impl fmt::Display for Slice {
-    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&Utf8Lossy::from_bytes(&self.inner), formatter)
     }
 }
 
 impl fmt::Debug for Buf {
-    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(self.as_slice(), formatter)
     }
 }
 
 impl fmt::Display for Buf {
-    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(self.as_slice(), formatter)
     }
 }
@@ -148,7 +154,7 @@ impl Slice {
         str::from_utf8(&self.inner).ok()
     }
 
-    pub fn to_string_lossy(&self) -> Cow<str> {
+    pub fn to_string_lossy(&self) -> Cow<'_, str> {
         String::from_utf8_lossy(&self.inner)
     }
 
@@ -236,9 +242,11 @@ pub trait OsStrExt {
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl OsStrExt for OsStr {
+    #[inline]
     fn from_bytes(slice: &[u8]) -> &OsStr {
         unsafe { mem::transmute(slice) }
     }
+    #[inline]
     fn as_bytes(&self) -> &[u8] {
         &self.as_inner().inner
     }

@@ -9,7 +9,7 @@ use crate::path::{self, PathBuf};
 use crate::ptr;
 use crate::str;
 use crate::sys::memchr;
-use crate::sys::{cvt, unsupported, Void};
+use crate::sys::{unsupported, Void};
 use crate::vec;
 
 #[cfg(not(target_feature = "atomics"))]
@@ -27,8 +27,16 @@ pub fn errno() -> i32 {
     unsafe { errno as i32 }
 }
 
-pub fn error_string(_errno: i32) -> String {
-    "operation failed".to_string()
+pub fn error_string(errno: i32) -> String {
+    let mut buf = [0 as libc::c_char; 1024];
+
+    let p = buf.as_mut_ptr();
+    unsafe {
+        if libc::strerror_r(errno as libc::c_int, p, buf.len()) < 0 {
+            panic!("strerror_r failure");
+        }
+        str::from_utf8(CStr::from_ptr(p).to_bytes()).unwrap().to_owned()
+    }
 }
 
 pub fn getcwd() -> io::Result<PathBuf> {
@@ -41,7 +49,7 @@ pub fn chdir(_: &path::Path) -> io::Result<()> {
 
 pub struct SplitPaths<'a>(&'a Void);
 
-pub fn split_paths(_unparsed: &OsStr) -> SplitPaths {
+pub fn split_paths(_unparsed: &OsStr) -> SplitPaths<'_> {
     panic!("unsupported")
 }
 
@@ -62,7 +70,7 @@ pub fn join_paths<I, T>(_paths: I) -> Result<OsString, JoinPathsError>
 }
 
 impl fmt::Display for JoinPathsError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         "not supported on wasm yet".fmt(f)
     }
 }
@@ -76,7 +84,6 @@ impl StdError for JoinPathsError {
 pub fn current_exe() -> io::Result<PathBuf> {
     unsupported()
 }
-
 pub struct Env {
     iter: vec::IntoIter<(OsString, OsString)>,
     _dont_send_or_sync_me: PhantomData<*mut ()>,
@@ -168,4 +175,27 @@ pub fn exit(code: i32) -> ! {
 
 pub fn getpid() -> u32 {
     panic!("unsupported");
+}
+
+#[doc(hidden)]
+pub trait IsMinusOne {
+    fn is_minus_one(&self) -> bool;
+}
+
+macro_rules! impl_is_minus_one {
+    ($($t:ident)*) => ($(impl IsMinusOne for $t {
+        fn is_minus_one(&self) -> bool {
+            *self == -1
+        }
+    })*)
+}
+
+impl_is_minus_one! { i8 i16 i32 i64 isize }
+
+fn cvt<T: IsMinusOne>(t: T) -> io::Result<T> {
+    if t.is_minus_one() {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(t)
+    }
 }

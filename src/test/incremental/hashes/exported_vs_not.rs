@@ -1,4 +1,4 @@
-// compile-pass
+// build-pass (FIXME(62277): could be check-pass?)
 // revisions: cfail1 cfail2 cfail3
 // compile-flags: -Z query-dep-graph -Zincremental-ignore-spans
 
@@ -61,4 +61,3 @@ pub fn body_exported_to_metadata_because_of_generic() -> u32 {
 pub fn body_exported_to_metadata_because_of_generic() -> u32 {
     2
 }
-

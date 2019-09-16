@@ -12,8 +12,6 @@ mod waitqueue;
 
 pub mod alloc;
 pub mod args;
-#[cfg(feature = "backtrace")]
-pub mod backtrace;
 pub mod cmath;
 pub mod condvar;
 pub mod env;
@@ -130,16 +128,25 @@ pub unsafe fn abort_internal() -> ! {
     abi::usercalls::exit(true)
 }
 
+// This function is needed by the panic runtime. The symbol is named in
+// pre-link args for the target specification, so keep that in sync.
+#[cfg(not(test))]
+#[no_mangle]
+// NB. used by both libunwind and libpanic_abort
+pub unsafe extern "C" fn __rust_abort() {
+    abort_internal();
+}
+
 pub fn hashmap_random_keys() -> (u64, u64) {
     fn rdrand64() -> u64 {
         unsafe {
-            let mut ret: u64 = crate::mem::uninitialized();
+            let mut ret: u64 = 0;
             for _ in 0..10 {
                 if crate::arch::x86_64::_rdrand64_step(&mut ret) == 1 {
                     return ret;
                 }
             }
-            panic!("Failed to obtain random data");
+            rtabort!("Failed to obtain random data");
         }
     }
     (rdrand64(), rdrand64())

@@ -15,6 +15,8 @@ error[E0603]: tuple struct `TupleStruct` is private
    |
 LL |     let ts_explicit = structs::TupleStruct(640, 480);
    |                                ^^^^^^^^^^^
+   |
+   = note: a tuple struct constructor is private if any of its fields is private
 
 error[E0603]: unit struct `UnitStruct` is private
   --> $DIR/struct.rs:32:32
@@ -60,5 +62,5 @@ LL |     let UnitStruct { } = us;
 
 error: aborting due to 9 previous errors
 
-Some errors occurred: E0423, E0603, E0638, E0639.
+Some errors have detailed explanations: E0423, E0603, E0638, E0639.
 For more information about an error, try `rustc --explain E0423`.

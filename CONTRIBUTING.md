@@ -122,6 +122,13 @@ bring those changes into the source repository.
 
 Please make pull requests against the `master` branch.
 
+Rust follows a no merge policy, meaning, when you encounter merge
+conflicts you are expected to always rebase instead of merge.
+E.g. always use rebase when bringing the latest changes from
+the master branch to your feature branch.
+Also, please make sure that fixup commits are squashed into other related
+commits with meaningful commit messages.
+
 Please make sure your pull request is in compliance with Rust's style
 guidelines by running
 
@@ -172,7 +179,6 @@ Speaking of tests, Rust has a comprehensive test suite. More information about
 it can be found [here][rctd].
 
 ### External Dependencies
-[external-dependencies]: #external-dependencies
 
 Currently building Rust will also build the following external projects:
 
@@ -202,7 +208,6 @@ Breakage is not allowed in the beta and stable channels, and must be addressed
 before the PR is merged.
 
 #### Breaking Tools Built With The Compiler
-[breaking-tools-built-with-the-compiler]: #breaking-tools-built-with-the-compiler
 
 Rust's build system builds a number of tools that make use of the
 internals of the compiler. This includes
@@ -235,7 +240,7 @@ Here are those same steps in detail:
    `config.toml.example` in the root directory of the Rust repository.
    Set `submodules = false` in the `[build]` section. This will prevent `x.py`
    from resetting to the original branch after you make your changes. If you
-   need to [update any submodules to their latest versions][updating-submodules],
+   need to [update any submodules to their latest versions](#updating-submodules),
    see the section of this file about that for more information.
 2. (optional) Run `./x.py test src/tools/rustfmt` (substituting the submodule
    that broke for `rustfmt`). Fix any errors in the submodule (and possibly others).
@@ -249,7 +254,6 @@ Here are those same steps in detail:
 8. (optional) Send a PR to rust-lang/rust updating the submodule.
 
 #### Updating submodules
-[updating-submodules]: #updating-submodules
 
 These instructions are specific to updating `rustfmt`, however they may apply
 to the other submodules as well. Please help by improving these instructions
@@ -303,7 +307,6 @@ This should change the version listed in `Cargo.lock` to the new version you upd
 the submodule to. Running `./x.py build` should work now.
 
 ## Writing Documentation
-[writing-documentation]: #writing-documentation
 
 Documentation improvements are very welcome. The source of `doc.rust-lang.org`
 is located in `src/doc` in the tree, and standard API documentation is generated
@@ -330,7 +333,6 @@ tracker in that repo is also a great way to find things that need doing. There
 are issues for beginners and advanced compiler devs alike!
 
 ## Issue Triage
-[issue-triage]: #issue-triage
 
 Sometimes, an issue will stay open, even though the bug has been fixed. And
 sometimes, the original bug may go stale because something has changed in the
@@ -398,7 +400,6 @@ If you're looking for somewhere to start, check out the [E-easy][eeasy] tag.
 [rfcbot]: https://github.com/anp/rfcbot-rs/
 
 ## Out-of-tree Contributions
-[out-of-tree-contributions]: #out-of-tree-contributions
 
 There are a number of other ways to contribute to Rust that don't deal with
 this repository.
@@ -418,7 +419,6 @@ valuable!
 [community-library]: https://github.com/rust-lang/rfcs/labels/A-community-library
 
 ## Helpful Links and Information
-[helpful-info]: #helpful-info
 
 For people new to Rust, and just starting to contribute, or even for
 more seasoned developers, some useful places to look for information

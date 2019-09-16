@@ -3,18 +3,15 @@
 #![feature(box_patterns)]
 #![feature(box_syntax)]
 #![feature(core_intrinsics)]
-#![feature(custom_attribute)]
 #![feature(libc)]
-#![feature(rustc_diagnostic_macros)]
+#![feature(slice_patterns)]
 #![feature(stmt_expr_attributes)]
 #![feature(try_blocks)]
 #![feature(in_band_lifetimes)]
 #![feature(nll)]
 #![feature(trusted_len)]
-#![allow(unused_attributes)]
-#![allow(dead_code)]
-#![deny(rust_2018_idioms)]
-#![allow(explicit_outlives_requirements)]
+#![feature(mem_take)]
+#![feature(associated_type_bounds)]
 
 #![recursion_limit="256"]
 
@@ -38,9 +35,7 @@ use rustc_data_structures::svh::Svh;
 use rustc::middle::cstore::{LibSource, CrateSource, NativeLibrary};
 use syntax_pos::symbol::Symbol;
 
-// N.B., this module needs to be declared first so diagnostics are
-// registered before they are used.
-mod diagnostics;
+mod error_codes;
 
 pub mod common;
 pub mod traits;
@@ -65,6 +60,7 @@ pub struct ModuleCodegen<M> {
     pub kind: ModuleKind,
 }
 
+pub const METADATA_FILENAME: &str = "rust.metadata.bin";
 pub const RLIB_BYTECODE_EXTENSION: &str = "bc.z";
 
 impl<M> ModuleCodegen<M> {
@@ -130,6 +126,7 @@ bitflags::bitflags! {
 }
 
 /// Misc info we load from metadata to persist beyond the tcx.
+#[derive(Debug)]
 pub struct CrateInfo {
     pub panic_runtime: Option<CrateNum>,
     pub compiler_builtins: Option<CrateNum>,
@@ -152,12 +149,10 @@ pub struct CodegenResults {
     pub crate_name: Symbol,
     pub modules: Vec<CompiledModule>,
     pub allocator_module: Option<CompiledModule>,
-    pub metadata_module: CompiledModule,
+    pub metadata_module: Option<CompiledModule>,
     pub crate_hash: Svh,
     pub metadata: rustc::middle::cstore::EncodedMetadata,
     pub windows_subsystem: Option<String>,
     pub linker_info: back::linker::LinkerInfo,
     pub crate_info: CrateInfo,
 }
-
-__build_diagnostic_array! { librustc_codegen_ssa, DIAGNOSTICS }

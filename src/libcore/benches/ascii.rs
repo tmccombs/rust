@@ -2,7 +2,7 @@
 // after wrap-adding 0x1F:
 //
 //     b'a' + 0x1F == 0x80 == 0b1000_0000
-//     b'z' + 0x1F == 0x98 == 0b10011000
+//     b'z' + 0x1F == 0x98 == 0b1001_1000
 //
 // Lower-case ASCII 'z' is the last byte that has its highest bit unset
 // after wrap-adding 0x05:
@@ -191,7 +191,7 @@ benches! {
     fn case11_mask_mult_bool_match_range(bytes: &mut [u8]) {
         fn is_ascii_lowercase(b: u8) -> bool {
             match b {
-                b'a'...b'z' => true,
+                b'a'..=b'z' => true,
                 _ => false
             }
         }
@@ -203,7 +203,7 @@ benches! {
     fn case12_mask_shifted_bool_match_range(bytes: &mut [u8]) {
         fn is_ascii_lowercase(b: u8) -> bool {
             match b {
-                b'a'...b'z' => true,
+                b'a'..=b'z' => true,
                 _ => false
             }
         }
@@ -215,7 +215,7 @@ benches! {
     fn case13_subtract_shifted_bool_match_range(bytes: &mut [u8]) {
         fn is_ascii_lowercase(b: u8) -> bool {
             match b {
-                b'a'...b'z' => true,
+                b'a'..=b'z' => true,
                 _ => false
             }
         }
@@ -227,7 +227,7 @@ benches! {
     fn case14_subtract_multiplied_bool_match_range(bytes: &mut [u8]) {
         fn is_ascii_lowercase(b: u8) -> bool {
             match b {
-                b'a'...b'z' => true,
+                b'a'..=b'z' => true,
                 _ => false
             }
         }

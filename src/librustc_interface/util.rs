@@ -21,7 +21,6 @@ use rustc_plugin;
 use rustc_privacy;
 use rustc_resolve;
 use rustc_typeck;
-use std::collections::HashSet;
 use std::env;
 use std::env::consts::{DLL_PREFIX, DLL_SUFFIX};
 use std::io::{self, Write};
@@ -36,24 +35,25 @@ use syntax::mut_visit::{*, MutVisitor, visit_clobber};
 use syntax::ast::BlockCheckMode;
 use syntax::util::lev_distance::find_best_match_for_name;
 use syntax::source_map::{FileLoader, RealFileLoader, SourceMap};
-use syntax::symbol::Symbol;
+use syntax::symbol::{Symbol, sym};
 use syntax::{self, ast, attr};
+use syntax_pos::edition::Edition;
 #[cfg(not(parallel_compiler))]
 use std::{thread, panic};
 
 pub fn diagnostics_registry() -> Registry {
     let mut all_errors = Vec::new();
-    all_errors.extend_from_slice(&rustc::DIAGNOSTICS);
-    all_errors.extend_from_slice(&rustc_typeck::DIAGNOSTICS);
-    all_errors.extend_from_slice(&rustc_resolve::DIAGNOSTICS);
-    all_errors.extend_from_slice(&rustc_privacy::DIAGNOSTICS);
+    all_errors.extend_from_slice(&rustc::error_codes::DIAGNOSTICS);
+    all_errors.extend_from_slice(&rustc_typeck::error_codes::DIAGNOSTICS);
+    all_errors.extend_from_slice(&rustc_resolve::error_codes::DIAGNOSTICS);
+    all_errors.extend_from_slice(&rustc_privacy::error_codes::DIAGNOSTICS);
     // FIXME: need to figure out a way to get these back in here
     // all_errors.extend_from_slice(get_codegen_backend(sess).diagnostics());
-    all_errors.extend_from_slice(&rustc_metadata::DIAGNOSTICS);
-    all_errors.extend_from_slice(&rustc_passes::DIAGNOSTICS);
-    all_errors.extend_from_slice(&rustc_plugin::DIAGNOSTICS);
-    all_errors.extend_from_slice(&rustc_mir::DIAGNOSTICS);
-    all_errors.extend_from_slice(&syntax::DIAGNOSTICS);
+    all_errors.extend_from_slice(&rustc_metadata::error_codes::DIAGNOSTICS);
+    all_errors.extend_from_slice(&rustc_passes::error_codes::DIAGNOSTICS);
+    all_errors.extend_from_slice(&rustc_plugin::error_codes::DIAGNOSTICS);
+    all_errors.extend_from_slice(&rustc_mir::error_codes::DIAGNOSTICS);
+    all_errors.extend_from_slice(&syntax::error_codes::DIAGNOSTICS);
 
     Registry::new(&all_errors)
 }
@@ -68,7 +68,7 @@ pub fn add_configuration(
     sess: &Session,
     codegen_backend: &dyn CodegenBackend,
 ) {
-    let tf = Symbol::intern("target_feature");
+    let tf = sym::target_feature;
 
     cfg.extend(
         codegen_backend
@@ -109,6 +109,9 @@ pub fn create_session(
     let codegen_backend = get_codegen_backend(&sess);
 
     rustc_lint::register_builtins(&mut sess.lint_store.borrow_mut(), Some(&sess));
+    if sess.unstable_options() {
+        rustc_lint::register_internals(&mut sess.lint_store.borrow_mut(), Some(&sess));
+    }
 
     let mut cfg = config::build_configuration(&sess, config::to_crate_config(cfg));
     add_configuration(&mut cfg, &sess, &*codegen_backend);
@@ -118,9 +121,13 @@ pub fn create_session(
 }
 
 // Temporarily have stack size set to 32MB to deal with various crates with long method
-// chains or deep syntax trees.
+// chains or deep syntax trees, except when on Haiku.
 // FIXME(oli-obk): get https://github.com/rust-lang/rust/pull/55617 the finish line
-const STACK_SIZE: usize = 32 * 1024 * 1024; // 32MB
+#[cfg(not(target_os = "haiku"))]
+const STACK_SIZE: usize = 32 * 1024 * 1024;
+
+#[cfg(target_os = "haiku")]
+const STACK_SIZE: usize = 16 * 1024 * 1024;
 
 fn get_stack_size() -> Option<usize> {
     // FIXME: Hacks on hacks. If the env is trying to override the stack size
@@ -165,6 +172,7 @@ pub fn scoped_thread<F: FnOnce() -> R + Send, R: Send>(cfg: thread::Builder, f: 
 
 #[cfg(not(parallel_compiler))]
 pub fn spawn_thread_pool<F: FnOnce() -> R + Send, R: Send>(
+    edition: Edition,
     _threads: Option<usize>,
     stderr: &Option<Arc<Mutex<Vec<u8>>>>,
     f: F,
@@ -176,7 +184,7 @@ pub fn spawn_thread_pool<F: FnOnce() -> R + Send, R: Send>(
     }
 
     scoped_thread(cfg, || {
-        syntax::with_globals( || {
+        syntax::with_globals(edition, || {
             ty::tls::GCX_PTR.set(&Lock::new(0), || {
                 if let Some(stderr) = stderr {
                     io::set_panic(Some(box Sink(stderr.clone())));
@@ -189,13 +197,12 @@ pub fn spawn_thread_pool<F: FnOnce() -> R + Send, R: Send>(
 
 #[cfg(parallel_compiler)]
 pub fn spawn_thread_pool<F: FnOnce() -> R + Send, R: Send>(
+    edition: Edition,
     threads: Option<usize>,
     stderr: &Option<Arc<Mutex<Vec<u8>>>>,
     f: F,
 ) -> R {
     use rayon::{ThreadPool, ThreadPoolBuilder};
-    use syntax;
-    use syntax_pos;
 
     let gcx_ptr = &Lock::new(0);
 
@@ -211,7 +218,7 @@ pub fn spawn_thread_pool<F: FnOnce() -> R + Send, R: Send>(
 
     let with_pool = move |pool: &ThreadPool| pool.install(move || f());
 
-    syntax::with_globals(|| {
+    syntax::with_globals(edition, || {
         syntax::GLOBALS.with(|syntax_globals| {
             syntax_pos::GLOBALS.with(|syntax_pos_globals| {
                 // The main handler runs for each Rayon worker thread and sets up
@@ -282,20 +289,39 @@ pub fn get_codegen_backend(sess: &Session) -> Box<dyn CodegenBackend> {
     backend
 }
 
-pub fn get_codegen_sysroot(backend_name: &str) -> fn() -> Box<dyn CodegenBackend> {
-    // For now we only allow this function to be called once as it'll dlopen a
-    // few things, which seems to work best if we only do that once. In
-    // general this assertion never trips due to the once guard in `get_codegen_backend`,
-    // but there's a few manual calls to this function in this file we protect
-    // against.
-    static LOADED: AtomicBool = AtomicBool::new(false);
-    assert!(!LOADED.fetch_or(true, Ordering::SeqCst),
-            "cannot load the default codegen backend twice");
+// This is used for rustdoc, but it uses similar machinery to codegen backend
+// loading, so we leave the code here. It is potentially useful for other tools
+// that want to invoke the rustc binary while linking to rustc as well.
+pub fn rustc_path<'a>() -> Option<&'a Path> {
+    static RUSTC_PATH: once_cell::sync::OnceCell<Option<PathBuf>> =
+        once_cell::sync::OnceCell::new();
 
+    const BIN_PATH: &str = env!("RUSTC_INSTALL_BINDIR");
+
+    RUSTC_PATH.get_or_init(|| get_rustc_path_inner(BIN_PATH)).as_ref().map(|v| &**v)
+}
+
+fn get_rustc_path_inner(bin_path: &str) -> Option<PathBuf> {
+    sysroot_candidates().iter()
+        .filter_map(|sysroot| {
+            let candidate = sysroot.join(bin_path).join(if cfg!(target_os = "windows") {
+                "rustc.exe"
+            } else {
+                "rustc"
+            });
+            if candidate.exists() {
+                Some(candidate)
+            } else {
+                None
+            }
+        })
+        .next()
+}
+
+fn sysroot_candidates() -> Vec<PathBuf> {
     let target = session::config::host_triple();
     let mut sysroot_candidates = vec![filesearch::get_or_default_sysroot()];
-    let path = current_dll_path()
-        .and_then(|s| s.canonicalize().ok());
+    let path = current_dll_path().and_then(|s| s.canonicalize().ok());
     if let Some(dll) = path {
         // use `parent` twice to chop off the file name and then also the
         // directory containing the dll which should be either `lib` or `bin`.
@@ -320,69 +346,7 @@ pub fn get_codegen_sysroot(backend_name: &str) -> fn() -> Box<dyn CodegenBackend
         }
     }
 
-    let sysroot = sysroot_candidates.iter()
-        .map(|sysroot| {
-            let libdir = filesearch::relative_target_lib_path(&sysroot, &target);
-            sysroot.join(libdir).with_file_name(
-                option_env!("CFG_CODEGEN_BACKENDS_DIR").unwrap_or("codegen-backends"))
-        })
-        .filter(|f| {
-            info!("codegen backend candidate: {}", f.display());
-            f.exists()
-        })
-        .next();
-    let sysroot = sysroot.unwrap_or_else(|| {
-        let candidates = sysroot_candidates.iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<_>>()
-            .join("\n* ");
-        let err = format!("failed to find a `codegen-backends` folder \
-                           in the sysroot candidates:\n* {}", candidates);
-        early_error(ErrorOutputType::default(), &err);
-    });
-    info!("probing {} for a codegen backend", sysroot.display());
-
-    let d = sysroot.read_dir().unwrap_or_else(|e| {
-        let err = format!("failed to load default codegen backend, couldn't \
-                           read `{}`: {}", sysroot.display(), e);
-        early_error(ErrorOutputType::default(), &err);
-    });
-
-    let mut file: Option<PathBuf> = None;
-
-    let expected_name = format!("rustc_codegen_llvm-{}", backend_name);
-    for entry in d.filter_map(|e| e.ok()) {
-        let path = entry.path();
-        let filename = match path.file_name().and_then(|s| s.to_str()) {
-            Some(s) => s,
-            None => continue,
-        };
-        if !(filename.starts_with(DLL_PREFIX) && filename.ends_with(DLL_SUFFIX)) {
-            continue
-        }
-        let name = &filename[DLL_PREFIX.len() .. filename.len() - DLL_SUFFIX.len()];
-        if name != expected_name {
-            continue
-        }
-        if let Some(ref prev) = file {
-            let err = format!("duplicate codegen backends found\n\
-                               first:  {}\n\
-                               second: {}\n\
-            ", prev.display(), path.display());
-            early_error(ErrorOutputType::default(), &err);
-        }
-        file = Some(path.clone());
-    }
-
-    match file {
-        Some(ref s) => return load_backend_from_dylib(s),
-        None => {
-            let err = format!("failed to load default codegen backend for `{}`, \
-                               no appropriate codegen dylib found in `{}`",
-                              backend_name, sysroot.display());
-            early_error(ErrorOutputType::default(), &err);
-        }
-    }
+    return sysroot_candidates;
 
     #[cfg(unix)]
     fn current_dll_path() -> Option<PathBuf> {
@@ -452,6 +416,85 @@ pub fn get_codegen_sysroot(backend_name: &str) -> fn() -> Box<dyn CodegenBackend
     }
 }
 
+pub fn get_codegen_sysroot(backend_name: &str) -> fn() -> Box<dyn CodegenBackend> {
+    // For now we only allow this function to be called once as it'll dlopen a
+    // few things, which seems to work best if we only do that once. In
+    // general this assertion never trips due to the once guard in `get_codegen_backend`,
+    // but there's a few manual calls to this function in this file we protect
+    // against.
+    static LOADED: AtomicBool = AtomicBool::new(false);
+    assert!(!LOADED.fetch_or(true, Ordering::SeqCst),
+            "cannot load the default codegen backend twice");
+
+    let target = session::config::host_triple();
+    let sysroot_candidates = sysroot_candidates();
+
+    let sysroot = sysroot_candidates.iter()
+        .map(|sysroot| {
+            let libdir = filesearch::relative_target_lib_path(&sysroot, &target);
+            sysroot.join(libdir).with_file_name(
+                option_env!("CFG_CODEGEN_BACKENDS_DIR").unwrap_or("codegen-backends"))
+        })
+        .filter(|f| {
+            info!("codegen backend candidate: {}", f.display());
+            f.exists()
+        })
+        .next();
+    let sysroot = sysroot.unwrap_or_else(|| {
+        let candidates = sysroot_candidates.iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join("\n* ");
+        let err = format!("failed to find a `codegen-backends` folder \
+                           in the sysroot candidates:\n* {}", candidates);
+        early_error(ErrorOutputType::default(), &err);
+    });
+    info!("probing {} for a codegen backend", sysroot.display());
+
+    let d = sysroot.read_dir().unwrap_or_else(|e| {
+        let err = format!("failed to load default codegen backend, couldn't \
+                           read `{}`: {}", sysroot.display(), e);
+        early_error(ErrorOutputType::default(), &err);
+    });
+
+    let mut file: Option<PathBuf> = None;
+
+    let expected_name = format!("rustc_codegen_llvm-{}", backend_name);
+    for entry in d.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        let filename = match path.file_name().and_then(|s| s.to_str()) {
+            Some(s) => s,
+            None => continue,
+        };
+        if !(filename.starts_with(DLL_PREFIX) && filename.ends_with(DLL_SUFFIX)) {
+            continue
+        }
+        let name = &filename[DLL_PREFIX.len() .. filename.len() - DLL_SUFFIX.len()];
+        if name != expected_name {
+            continue
+        }
+        if let Some(ref prev) = file {
+            let err = format!("duplicate codegen backends found\n\
+                               first:  {}\n\
+                               second: {}\n\
+            ", prev.display(), path.display());
+            early_error(ErrorOutputType::default(), &err);
+        }
+        file = Some(path.clone());
+    }
+
+    match file {
+        Some(ref s) => return load_backend_from_dylib(s),
+        None => {
+            let err = format!("failed to load default codegen backend for `{}`, \
+                               no appropriate codegen dylib found in `{}`",
+                              backend_name, sysroot.display());
+            early_error(ErrorOutputType::default(), &err);
+        }
+    }
+
+}
+
 pub(crate) fn compute_crate_disambiguator(session: &Session) -> CrateDisambiguator {
     use std::hash::Hasher;
 
@@ -493,24 +536,24 @@ pub fn collect_crate_types(session: &Session, attrs: &[ast::Attribute]) -> Vec<c
     let attr_types: Vec<config::CrateType> = attrs
         .iter()
         .filter_map(|a| {
-            if a.check_name("crate_type") {
+            if a.check_name(sym::crate_type) {
                 match a.value_str() {
-                    Some(ref n) if *n == "rlib" => Some(config::CrateType::Rlib),
-                    Some(ref n) if *n == "dylib" => Some(config::CrateType::Dylib),
-                    Some(ref n) if *n == "cdylib" => Some(config::CrateType::Cdylib),
-                    Some(ref n) if *n == "lib" => Some(config::default_lib_output()),
-                    Some(ref n) if *n == "staticlib" => Some(config::CrateType::Staticlib),
-                    Some(ref n) if *n == "proc-macro" => Some(config::CrateType::ProcMacro),
-                    Some(ref n) if *n == "bin" => Some(config::CrateType::Executable),
-                    Some(ref n) => {
+                    Some(sym::rlib) => Some(config::CrateType::Rlib),
+                    Some(sym::dylib) => Some(config::CrateType::Dylib),
+                    Some(sym::cdylib) => Some(config::CrateType::Cdylib),
+                    Some(sym::lib) => Some(config::default_lib_output()),
+                    Some(sym::staticlib) => Some(config::CrateType::Staticlib),
+                    Some(sym::proc_dash_macro) => Some(config::CrateType::ProcMacro),
+                    Some(sym::bin) => Some(config::CrateType::Executable),
+                    Some(n) => {
                         let crate_types = vec![
-                            Symbol::intern("rlib"),
-                            Symbol::intern("dylib"),
-                            Symbol::intern("cdylib"),
-                            Symbol::intern("lib"),
-                            Symbol::intern("staticlib"),
-                            Symbol::intern("proc-macro"),
-                            Symbol::intern("bin")
+                            sym::rlib,
+                            sym::dylib,
+                            sym::cdylib,
+                            sym::lib,
+                            sym::staticlib,
+                            sym::proc_dash_macro,
+                            sym::bin
                         ];
 
                         if let ast::MetaItemKind::NameValue(spanned) = a.meta().unwrap().node {
@@ -633,13 +676,13 @@ pub fn build_output_filenames(
                 );
                 None
             } else {
+                if !sess.opts.cg.extra_filename.is_empty() {
+                    sess.warn("ignoring -C extra-filename flag due to -o flag");
+                }
                 Some(out_file.clone())
             };
             if *odir != None {
                 sess.warn("ignoring --out-dir flag due to -o flag");
-            }
-            if !sess.opts.cg.extra_filename.is_empty() {
-                sess.warn("ignoring -C extra-filename flag due to -o flag");
             }
 
             OutputFilenames {
@@ -712,7 +755,13 @@ impl<'a> ReplaceBodyWithLoop<'a> {
                                     _ => None,
                                 });
                                 any_involves_impl_trait(types.into_iter()) ||
-                                any_involves_impl_trait(data.bindings.iter().map(|b| &b.ty))
+                                data.constraints.iter().any(|c| {
+                                    match c.kind {
+                                        ast::AssocTyConstraintKind::Bound { .. } => true,
+                                        ast::AssocTyConstraintKind::Equality { ref ty } =>
+                                            involves_impl_trait(ty),
+                                    }
+                                })
                             },
                             Some(&ast::GenericArgs::Parenthesized(ref data)) => {
                                 any_involves_impl_trait(data.inputs.iter()) ||

@@ -30,3 +30,17 @@ unsafe impl GlobalAlloc for System {
         DLMALLOC.lock().realloc(ptr, layout.size(), layout.align(), new_size)
     }
 }
+
+// The following functions are needed by libunwind. These symbols are named
+// in pre-link args for the target specification, so keep that in sync.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __rust_c_alloc(size: usize, align: usize) -> *mut u8 {
+    crate::alloc::alloc(Layout::from_size_align_unchecked(size, align))
+}
+
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __rust_c_dealloc(ptr: *mut u8, size: usize, align: usize) {
+    crate::alloc::dealloc(ptr, Layout::from_size_align_unchecked(size, align))
+}

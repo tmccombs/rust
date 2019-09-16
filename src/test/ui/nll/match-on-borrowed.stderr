@@ -34,13 +34,13 @@ LL |         true => (),
 LL |     x;
    |     - borrow later used here
 
-error[E0381]: use of possibly uninitialized variable: `n`
+error[E0381]: use of possibly-uninitialized variable: `n`
   --> $DIR/match-on-borrowed.rs:92:11
    |
 LL |     match n {}
-   |           ^ use of possibly uninitialized `n`
+   |           ^ use of possibly-uninitialized `n`
 
 error: aborting due to 4 previous errors
 
-Some errors occurred: E0381, E0503.
+Some errors have detailed explanations: E0381, E0503.
 For more information about an error, try `rustc --explain E0381`.

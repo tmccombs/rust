@@ -422,7 +422,7 @@ impl UdpSocket {
     /// Sets the value of the `IP_MULTICAST_LOOP` option for this socket.
     ///
     /// If enabled, multicast packets will be looped back to the local socket.
-    /// Note that this may not have any affect on IPv6 sockets.
+    /// Note that this may not have any effect on IPv6 sockets.
     ///
     /// # Examples
     ///
@@ -464,7 +464,7 @@ impl UdpSocket {
     /// this socket. The default value is 1 which means that multicast packets
     /// don't leave the local network unless explicitly requested.
     ///
-    /// Note that this may not have any affect on IPv6 sockets.
+    /// Note that this may not have any effect on IPv6 sockets.
     ///
     /// # Examples
     ///
@@ -832,7 +832,7 @@ impl IntoInner<net_imp::UdpSocket> for UdpSocket {
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl fmt::Debug for UdpSocket {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
 }
@@ -1024,9 +1024,10 @@ mod tests {
         assert_eq!(format!("{:?}", udpsock), compare);
     }
 
-    // FIXME: re-enabled bitrig/openbsd/netbsd tests once their socket timeout code
+    // FIXME: re-enabled openbsd/netbsd tests once their socket timeout code
     //        no longer has rounding errors.
-    #[cfg_attr(any(target_os = "bitrig", target_os = "netbsd", target_os = "openbsd"), ignore)]
+    // VxWorks ignores SO_SNDTIMEO.
+    #[cfg_attr(any(target_os = "netbsd", target_os = "openbsd", target_os = "vxworks"), ignore)]
     #[test]
     fn timeouts() {
         let addr = next_test_ip4();
