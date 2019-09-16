@@ -974,7 +974,7 @@ extern "rust-intrinsic" {
     ///
     /// `size_of::<T>` must be an integer power of two no larger than the
     /// target-specific atomic access size limit.
-    #[cfg(not(stage0))]
+    #[cfg(not(boostrap_stdarch_ignore_this))]
     pub fn atomic_element_copy_nonoverlapping_memory_unordered<T>(dst: *mut T, src: *const T, count: usize);
 
     /// Equivalent to the appropriate `llvm.memmove.unordered.atomic.p0i8.p0i8.*` intrinsic, with
@@ -983,7 +983,7 @@ extern "rust-intrinsic" {
     ///
     /// `size_of::<T>` must be an integer power of two no larger than the
     /// target-specific atomic access size limit.
-    #[cfg(not(stage0))]
+    #[cfg(not(boostrap_stdarch_ignore_this))]
     pub fn atomic_element_copy_memory_unordered<T>(dst: *mut T, src: *const T, count: usize);
 
     /// Equivalent to the appropriate `llvm.memset.unordered.atomic.p0i8.p0i8.*` intrinsic, with
@@ -992,7 +992,7 @@ extern "rust-intrinsic" {
     ///
     /// `size_of::<T>` must be an integer power of two no larger than the
     /// target-specific atomic access size limit.
-    #[cfg(not(stage0))]
+    #[cfg(not(boostrap_stdarch_ignore_this))]
     pub fn atomic_element_set_memory_unordered<T>(dst: *mut T, val: u8, count: usize);
 
     /// Equivalent to the appropriate `llvm.memcpy.p0i8.0i8.*` intrinsic, with
