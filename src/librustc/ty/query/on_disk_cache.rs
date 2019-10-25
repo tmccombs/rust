@@ -15,7 +15,7 @@ use errors::Diagnostic;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_data_structures::thin_vec::ThinVec;
 use rustc_data_structures::sync::{Lrc, Lock, HashMapExt, Once};
-use rustc_data_structures::indexed_vec::{IndexVec, Idx};
+use rustc_index::vec::{IndexVec, Idx};
 use rustc_serialize::{
     Decodable, Decoder, Encodable, Encoder, SpecializedDecoder, SpecializedEncoder,
     UseSpecializedDecodable, UseSpecializedEncodable, opaque,
@@ -643,7 +643,7 @@ impl<'a, 'tcx> SpecializedDecoder<DefIndex> for CacheDecoder<'a, 'tcx> {
 
 // Both the `CrateNum` and the `DefIndex` of a `DefId` can change in between two
 // compilation sessions. We use the `DefPathHash`, which is stable across
-// sessions, to map the old DefId`` to the new one.
+// sessions, to map the old `DefId` to the new one.
 impl<'a, 'tcx> SpecializedDecoder<DefId> for CacheDecoder<'a, 'tcx> {
     #[inline]
     fn specialized_decode(&mut self) -> Result<DefId, Self::Error> {
@@ -882,15 +882,16 @@ where
     }
 }
 
-impl<'a, 'tcx, E> SpecializedEncoder<ty::GenericPredicates<'tcx>> for CacheEncoder<'a, 'tcx, E>
+impl<'a, 'tcx, E> SpecializedEncoder<&'tcx [(ty::Predicate<'tcx>, Span)]>
+    for CacheEncoder<'a, 'tcx, E>
 where
     E: 'a + TyEncoder,
 {
     #[inline]
     fn specialized_encode(&mut self,
-                          predicates: &ty::GenericPredicates<'tcx>)
+                          predicates: &&'tcx [(ty::Predicate<'tcx>, Span)])
                           -> Result<(), Self::Error> {
-        ty_codec::encode_predicates(self, predicates,
+        ty_codec::encode_spanned_predicates(self, predicates,
             |encoder| &mut encoder.predicate_shorthands)
     }
 }
@@ -1075,7 +1076,7 @@ where
     let desc = &format!("encode_query_results for {}",
         ::std::any::type_name::<Q>());
 
-    time_ext(tcx.sess.time_extended(), Some(tcx.sess), desc, || {
+    time_ext(tcx.sess.time_extended(), desc, || {
         let shards = Q::query_cache(tcx).lock_shards();
         assert!(shards.iter().all(|shard| shard.active.is_empty()));
         for (key, entry) in shards.iter().flat_map(|shard| shard.results.iter()) {

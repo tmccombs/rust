@@ -36,14 +36,14 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             // 2. By expecting `bool` for `expr` we get nice diagnostics for e.g. `if x = y { .. }`.
             //
             // FIXME(60707): Consider removing hack with principled solution.
-            self.check_expr_has_type_or_error(discrim, self.tcx.types.bool)
+            self.check_expr_has_type_or_error(discrim, self.tcx.types.bool, |_| {})
         } else {
             self.demand_discriminant_type(arms, discrim)
         };
 
         // If there are no arms, that is a diverging match; a special case.
         if arms.is_empty() {
-            self.diverges.set(self.diverges.get() | Diverges::Always);
+            self.diverges.set(self.diverges.get() | Diverges::always(expr.span));
             return tcx.types.never;
         }
 
@@ -58,18 +58,16 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         // collection into `Vec`), so we get types for all bindings.
         let all_arm_pats_diverge: Vec<_> = arms.iter().map(|arm| {
             let mut all_pats_diverge = Diverges::WarnedAlways;
-            for p in &arm.pats {
-                self.diverges.set(Diverges::Maybe);
-                self.check_pat_top(&p, discrim_ty, Some(discrim.span));
-                all_pats_diverge &= self.diverges.get();
-            }
+            self.diverges.set(Diverges::Maybe);
+            self.check_pat_top(&arm.pat, discrim_ty, Some(discrim.span));
+            all_pats_diverge &= self.diverges.get();
 
             // As discussed with @eddyb, this is for disabling unreachable_code
             // warnings on patterns (they're now subsumed by unreachable_patterns
             // warnings).
             match all_pats_diverge {
                 Diverges::Maybe => Diverges::Maybe,
-                Diverges::Always | Diverges::WarnedAlways => Diverges::WarnedAlways,
+                Diverges::Always { .. } | Diverges::WarnedAlways => Diverges::WarnedAlways,
             }
         }).collect();
 
@@ -108,7 +106,9 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             if let Some(g) = &arm.guard {
                 self.diverges.set(pats_diverge);
                 match g {
-                    hir::Guard::If(e) => self.check_expr_has_type_or_error(e, tcx.types.bool),
+                    hir::Guard::If(e) => {
+                        self.check_expr_has_type_or_error(e, tcx.types.bool, |_| {})
+                    }
                 };
             }
 
@@ -137,7 +137,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                     }
                 }
             } else {
-                let arm_span = if let hir::ExprKind::Block(blk, _) = &arm.body.node {
+                let arm_span = if let hir::ExprKind::Block(blk, _) = &arm.body.kind {
                     // Point at the block expr instead of the entire block
                     blk.expr.as_ref().map(|e| e.span).unwrap_or(arm.body.span)
                 } else {
@@ -167,6 +167,21 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
             prior_arm_ty = Some(arm_ty);
         }
 
+        // If all of the arms in the `match` diverge,
+        // and we're dealing with an actual `match` block
+        // (as opposed to a `match` desugared from something else'),
+        // we can emit a better note. Rather than pointing
+        // at a diverging expression in an arbitrary arm,
+        // we can point at the entire `match` expression
+        if let (Diverges::Always { .. }, hir::MatchSource::Normal) = (all_arms_diverge, match_src) {
+            all_arms_diverge = Diverges::Always {
+                span: expr.span,
+                custom_note: Some(
+                    "any code following this `match` expression is unreachable, as all arms diverge"
+                )
+            };
+        }
+
         // We won't diverge unless the discriminant or all arms diverge.
         self.diverges.set(discrim_diverges | all_arms_diverge);
 
@@ -176,7 +191,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
     /// When the previously checked expression (the scrutinee) diverges,
     /// warn the user about the match arms being unreachable.
     fn warn_arms_when_scrutinee_diverges(&self, arms: &'tcx [hir::Arm], source: hir::MatchSource) {
-        if self.diverges.get().always() {
+        if self.diverges.get().is_always() {
             use hir::MatchSource::*;
             let msg = match source {
                 IfDesugar { .. } | IfLetDesugar { .. } => "block in `if` expression",
@@ -206,7 +221,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         coercion.coerce_forced_unit(self, &cause, &mut |err| {
             if let Some((span, msg)) = &ret_reason {
                 err.span_label(*span, msg.as_str());
-            } else if let ExprKind::Block(block, _) = &then_expr.node {
+            } else if let ExprKind::Block(block, _) = &then_expr.kind {
                 if let Some(expr) = &block.expr {
                     err.span_label(expr.span, "found here".to_string());
                 }
@@ -235,7 +250,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 ),
             );
             if let (Some(expr), Item(hir::Item {
-                node: hir::ItemKind::Fn(..), ..
+                kind: hir::ItemKind::Fn(..), ..
             })) = (&block.expr, parent) {
                 // check that the `if` expr without `else` is the fn body's expr
                 if expr.span == span {
@@ -287,7 +302,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         };
 
         let mut remove_semicolon = None;
-        let error_sp = if let ExprKind::Block(block, _) = &else_expr.node {
+        let error_sp = if let ExprKind::Block(block, _) = &else_expr.kind {
             if let Some(expr) = &block.expr {
                 expr.span
             } else if let Some(stmt) = block.stmts.last() {
@@ -332,7 +347,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         };
 
         // Compute `Span` of `then` part of `if`-expression.
-        let then_sp = if let ExprKind::Block(block, _) = &then_expr.node {
+        let then_sp = if let ExprKind::Block(block, _) = &then_expr.kind {
             if let Some(expr) = &block.expr {
                 expr.span
             } else if let Some(stmt) = block.stmts.last() {
@@ -413,11 +428,11 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
         //
         // See #44848.
         let contains_ref_bindings = arms.iter()
-                                        .filter_map(|a| a.contains_explicit_ref_binding())
-                                        .max_by_key(|m| match *m {
-                                            hir::MutMutable => 1,
-                                            hir::MutImmutable => 0,
-                                        });
+            .filter_map(|a| a.pat.contains_explicit_ref_binding())
+            .max_by_key(|m| match *m {
+                hir::MutMutable => 1,
+                hir::MutImmutable => 0,
+            });
 
         if let Some(m) = contains_ref_bindings {
             self.check_expr_with_needs(discrim, Needs::maybe_mut_place(m))
@@ -429,7 +444,7 @@ impl<'a, 'tcx> FnCtxt<'a, 'tcx> {
                 kind: TypeVariableOriginKind::TypeInference,
                 span: discrim.span,
             });
-            self.check_expr_has_type_or_error(discrim, discrim_ty);
+            self.check_expr_has_type_or_error(discrim, discrim_ty, |_| {});
             discrim_ty
         }
     }

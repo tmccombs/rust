@@ -236,7 +236,7 @@ impl<'a, 'tcx> WfPredicates<'a, 'tcx> {
         let mut subtys = ty0.walk();
         let param_env = self.param_env;
         while let Some(ty) = subtys.next() {
-            match ty.sty {
+            match ty.kind {
                 ty::Bool |
                 ty::Char |
                 ty::Int(..) |
@@ -347,7 +347,7 @@ impl<'a, 'tcx> WfPredicates<'a, 'tcx> {
                     // anyway, except via auto trait matching (which
                     // only inspects the upvar types).
                     subtys.skip_current_subtree(); // subtree handled by compute_projection
-                    for upvar_ty in substs.upvar_tys(def_id, self.infcx.tcx) {
+                    for upvar_ty in substs.as_closure().upvar_tys(def_id, self.infcx.tcx) {
                         self.compute(upvar_ty);
                     }
                 }
@@ -380,16 +380,21 @@ impl<'a, 'tcx> WfPredicates<'a, 'tcx> {
                     // obligations that don't refer to Self and
                     // checking those
 
-                    let cause = self.cause(traits::MiscObligation);
-                    let component_traits =
-                        data.auto_traits().chain(data.principal_def_id());
-                    self.out.extend(
-                        component_traits.map(|did| traits::Obligation::new(
-                            cause.clone(),
-                            param_env,
-                            ty::Predicate::ObjectSafe(did)
-                        ))
-                    );
+                    let defer_to_coercion =
+                        self.infcx.tcx.features().object_safe_for_dispatch;
+
+                    if !defer_to_coercion {
+                        let cause = self.cause(traits::MiscObligation);
+                        let component_traits =
+                            data.auto_traits().chain(data.principal_def_id());
+                        self.out.extend(
+                            component_traits.map(|did| traits::Obligation::new(
+                                cause.clone(),
+                                param_env,
+                                ty::Predicate::ObjectSafe(did)
+                            ))
+                        );
+                    }
                 }
 
                 // Inference variables are the complicated case, since we don't
@@ -407,7 +412,7 @@ impl<'a, 'tcx> WfPredicates<'a, 'tcx> {
                 //    is satisfied to ensure termination.)
                 ty::Infer(_) => {
                     let ty = self.infcx.shallow_resolve(ty);
-                    if let ty::Infer(_) = ty.sty { // not yet resolved...
+                    if let ty::Infer(_) = ty.kind { // not yet resolved...
                         if ty == ty0 { // ...this is the type we started from! no progress.
                             return false;
                         }

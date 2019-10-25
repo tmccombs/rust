@@ -1,5 +1,6 @@
 use rustc::hir;
 use rustc::hir::def_id::DefId;
+use rustc::hir::{AsyncGeneratorKind, GeneratorKind};
 use rustc::mir::{
     self, AggregateKind, BindingForm, BorrowKind, ClearCrossCrate, ConstraintCategory, Local,
     LocalDecl, LocalKind, Location, Operand, Place, PlaceBase, PlaceRef, ProjectionElem, Rvalue,
@@ -7,7 +8,7 @@ use rustc::mir::{
 };
 use rustc::ty::{self, Ty};
 use rustc_data_structures::fx::FxHashSet;
-use rustc_data_structures::indexed_vec::Idx;
+use rustc_index::vec::Idx;
 use rustc_errors::{Applicability, DiagnosticBuilder};
 use syntax_pos::Span;
 use syntax::source_map::DesugaringKind;
@@ -77,15 +78,13 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                 .last()
                 .unwrap();
 
-            if self.uninitialized_error_reported.contains(&root_place) {
+            if !self.uninitialized_error_reported.insert(root_place) {
                 debug!(
                     "report_use_of_moved_or_uninitialized place: error about {:?} suppressed",
                     root_place
                 );
                 return;
             }
-
-            self.uninitialized_error_reported.insert(root_place);
 
             let item_msg = match self.describe_place_with_options(used_place,
                                                                   IncludingDowncast(true)) {
@@ -105,9 +104,6 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                 format!("{} occurs due to use{}", desired_action.as_noun(), use_spans.describe()),
             );
 
-            // This error should not be downgraded to a warning,
-            // even in migrate mode.
-            self.disable_error_downgrading();
             err.buffer(&mut self.errors_buffer);
         } else {
             if let Some((reported_place, _)) = self.move_error_reported.get(&move_out_indices) {
@@ -180,7 +176,8 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                     );
                 }
                 if Some(DesugaringKind::ForLoop) == move_span.desugaring_kind() {
-                    if let Ok(snippet) = self.infcx.tcx.sess.source_map().span_to_snippet(span) {
+                    let sess = self.infcx.tcx.sess;
+                    if let Ok(snippet) = sess.source_map().span_to_snippet(move_span) {
                         err.span_suggestion(
                             move_span,
                             "consider borrowing to avoid moving into the for loop",
@@ -210,7 +207,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
             let ty =
                 Place::ty_from(used_place.base, used_place.projection, self.body, self.infcx.tcx)
                     .ty;
-            let needs_note = match ty.sty {
+            let needs_note = match ty.kind {
                 ty::Closure(id, _) => {
                     let tables = self.infcx.tcx.typeck_tables_of(id);
                     let hir_id = self.infcx.tcx.hir().as_local_hir_id(id).unwrap();
@@ -231,7 +228,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                     Some(ref name) => format!("`{}`", name),
                     None => "value".to_owned(),
                 };
-                if let ty::Param(param_ty) = ty.sty {
+                if let ty::Param(param_ty) = ty.kind {
                     let tcx = self.infcx.tcx;
                     let generics = tcx.generics_of(self.mir_def_id);
                     let def_id = generics.type_param(&param_ty, tcx).def_id;
@@ -614,8 +611,9 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                     projection,
                 } = first_borrowed_place;
 
-                for (i, elem) in projection.iter().enumerate().rev() {
-                    let proj_base = &projection[..i];
+                let mut cursor = &**projection;
+                while let [proj_base @ .., elem] = cursor {
+                    cursor = proj_base;
 
                     match elem {
                         ProjectionElem::Field(field, _) if union_ty(base, proj_base).is_some() => {
@@ -637,8 +635,9 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                     projection,
                 } = second_borrowed_place;
 
-                for (i, elem) in projection.iter().enumerate().rev() {
-                    let proj_base = &projection[..i];
+                let mut cursor = &**projection;
+                while let [proj_base @ .., elem] = cursor {
+                    cursor = proj_base;
 
                     if let ProjectionElem::Field(field, _) = elem {
                         if let Some(union_ty) = union_ty(base, proj_base) {
@@ -750,6 +749,11 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         let kind_place = kind.filter(|_| place_desc.is_some()).map(|k| (k, place_span.0));
         let explanation = self.explain_why_borrow_contains_point(location, &borrow, kind_place);
 
+        debug!(
+            "report_borrowed_value_does_not_live_long_enough(place_desc: {:?}, explanation: {:?})",
+            place_desc,
+            explanation
+        );
         let err = match (place_desc, explanation) {
             (Some(_), _) if self.is_place_thread_local(root_place) => {
                 self.report_thread_local_value_does_not_live_long_enough(drop_span, borrow_span)
@@ -783,7 +787,25 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                     ..
                 },
             ) if borrow_spans.for_closure() => self.report_escaping_closure_capture(
-                borrow_spans.args_or_use(),
+                borrow_spans,
+                borrow_span,
+                region_name,
+                category,
+                span,
+                &format!("`{}`", name),
+            ),
+            (
+                Some(ref name),
+                BorrowExplanation::MustBeValidFor {
+                    category: category @ ConstraintCategory::OpaqueType,
+                    from_closure: false,
+                    ref region_name,
+                    span,
+                    ..
+                },
+
+            ) if borrow_spans.for_generator() => self.report_escaping_closure_capture(
+                borrow_spans,
                 borrow_span,
                 region_name,
                 category,
@@ -1172,7 +1194,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
 
     fn report_escaping_closure_capture(
         &mut self,
-        args_span: Span,
+        use_span: UseSpans,
         var_span: Span,
         fr_name: &RegionName,
         category: ConstraintCategory,
@@ -1180,7 +1202,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         captured_var: &str,
     ) -> DiagnosticBuilder<'cx> {
         let tcx = self.infcx.tcx;
-
+        let args_span = use_span.args_or_use();
         let mut err = self.cannot_capture_in_long_lived_closure(
             args_span,
             captured_var,
@@ -1200,12 +1222,25 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
             },
             Err(_) => "move |<args>| <body>".to_string()
         };
-
+        let kind = match use_span.generator_kind() {
+            Some(generator_kind) => match generator_kind {
+                GeneratorKind::Async(async_kind) => match async_kind {
+                    AsyncGeneratorKind::Block => "async block",
+                    AsyncGeneratorKind::Closure => "async closure",
+                    _ => bug!("async block/closure expected, but async funtion found."),
+                },
+                GeneratorKind::Gen => "generator",
+            }
+            None => "closure",
+        };
         err.span_suggestion(
             args_span,
-            &format!("to force the closure to take ownership of {} (and any \
-                      other referenced variables), use the `move` keyword",
-                      captured_var),
+            &format!(
+                "to force the {} to take ownership of {} (and any \
+                 other referenced variables), use the `move` keyword",
+                 kind,
+                 captured_var
+            ),
             suggestion,
             Applicability::MachineApplicable,
         );
@@ -1213,6 +1248,9 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         match category {
             ConstraintCategory::Return => {
                 err.span_note(constraint_span, "closure is returned here");
+            }
+            ConstraintCategory::OpaqueType => {
+                err.span_note(constraint_span, "generator is returned here");
             }
             ConstraintCategory::CallArgument => {
                 fr_name.highlight_region_name(&mut err);
@@ -1240,7 +1278,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         let escapes_from = if tcx.is_closure(self.mir_def_id) {
             let tables = tcx.typeck_tables_of(self.mir_def_id);
             let mir_hir_id = tcx.hir().def_index_to_hir_id(self.mir_def_id.index);
-            match tables.node_type(mir_hir_id).sty {
+            match tables.node_type(mir_hir_id).kind {
                 ty::Closure(..) => "closure",
                 ty::Generator(..) => "generator",
                 _ => bug!("Closure body doesn't have a closure or generator type"),
@@ -1540,7 +1578,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                     },
                     ProjectionElem::Field(..) | ProjectionElem::Downcast(..) => {
                         let base_ty = Place::ty_from(&place.base, proj_base, self.body, tcx).ty;
-                        match base_ty.sty {
+                        match base_ty.kind {
                             ty::Adt(def, _) if def.has_dtor(tcx) => {
                                 // Report the outermost adt with a destructor
                                 match base_access {
@@ -1576,7 +1614,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                 None
             } else {
                 let ty = self.infcx.tcx.type_of(self.mir_def_id);
-                match ty.sty {
+                match ty.kind {
                     ty::FnDef(_, _) | ty::FnPtr(_) => self.annotate_fn_sig(
                         self.mir_def_id,
                         self.infcx.tcx.fn_sig(self.mir_def_id),
@@ -1831,18 +1869,18 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
         // 3. The return type is not a reference. In this case, we don't highlight
         //    anything.
         let return_ty = sig.output();
-        match return_ty.skip_binder().sty {
+        match return_ty.skip_binder().kind {
             ty::Ref(return_region, _, _) if return_region.has_name() && !is_closure => {
                 // This is case 1 from above, return type is a named reference so we need to
                 // search for relevant arguments.
                 let mut arguments = Vec::new();
                 for (index, argument) in sig.inputs().skip_binder().iter().enumerate() {
-                    if let ty::Ref(argument_region, _, _) = argument.sty {
+                    if let ty::Ref(argument_region, _, _) = argument.kind {
                         if argument_region == return_region {
                             // Need to use the `rustc::ty` types to compare against the
                             // `return_region`. Then use the `rustc::hir` type to get only
                             // the lifetime span.
-                            if let hir::TyKind::Rptr(lifetime, _) = &fn_decl.inputs[index].node {
+                            if let hir::TyKind::Rptr(lifetime, _) = &fn_decl.inputs[index].kind {
                                 // With access to the lifetime, we can get
                                 // the span of it.
                                 arguments.push((*argument, lifetime.span));
@@ -1863,7 +1901,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                 let return_ty = *sig.output().skip_binder();
                 let mut return_span = fn_decl.output.span();
                 if let hir::FunctionRetTy::Return(ty) = &fn_decl.output {
-                    if let hir::TyKind::Rptr(lifetime, _) = ty.node {
+                    if let hir::TyKind::Rptr(lifetime, _) = ty.kind {
                         return_span = lifetime.span;
                     }
                 }
@@ -1883,9 +1921,9 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
 
                 // Closure arguments are wrapped in a tuple, so we need to get the first
                 // from that.
-                if let ty::Tuple(elems) = argument_ty.sty {
+                if let ty::Tuple(elems) = argument_ty.kind {
                     let argument_ty = elems.first()?.expect_ty();
-                    if let ty::Ref(_, _, _) = argument_ty.sty {
+                    if let ty::Ref(_, _, _) = argument_ty.kind {
                         return Some(AnnotatedBorrowFnSignature::Closure {
                             argument_ty,
                             argument_span,
@@ -1905,7 +1943,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                 let return_ty = *sig.output().skip_binder();
 
                 // We expect the first argument to be a reference.
-                match argument_ty.sty {
+                match argument_ty.kind {
                     ty::Ref(_, _, _) => {}
                     _ => return None,
                 }

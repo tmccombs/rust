@@ -97,6 +97,7 @@ use crate::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 use crate::sync::Mutex;
 use crate::sys_common::backtrace::{output_filename, lock};
 use crate::vec::Vec;
+use backtrace_rs as backtrace;
 use backtrace::BytesOrWideString;
 
 /// A captured OS thread stack backtrace.
@@ -112,7 +113,7 @@ pub struct Backtrace {
 /// The current status of a backtrace, indicating whether it was captured or
 /// whether it is empty for some other reason.
 #[non_exhaustive]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum BacktraceStatus {
     /// Capturing a backtrace is not supported, likely because it's not
     /// implemented for the current platform.

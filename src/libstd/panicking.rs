@@ -12,13 +12,13 @@ use core::panic::{BoxMeUp, PanicInfo, Location};
 use crate::any::Any;
 use crate::fmt;
 use crate::intrinsics;
-use crate::mem;
-use crate::ptr;
+use crate::mem::{self, ManuallyDrop};
 use crate::raw;
+use crate::sync::atomic::{AtomicBool, Ordering};
 use crate::sys::stdio::panic_output;
 use crate::sys_common::rwlock::RWLock;
-use crate::sys_common::thread_info;
-use crate::sys_common::util;
+use crate::sys_common::{thread_info, util};
+use crate::sys_common::backtrace::{self, RustBacktrace};
 use crate::thread;
 
 #[cfg(not(test))]
@@ -157,20 +157,12 @@ pub fn take_hook() -> Box<dyn Fn(&PanicInfo<'_>) + 'static + Sync + Send> {
 }
 
 fn default_hook(info: &PanicInfo<'_>) {
-    #[cfg(feature = "backtrace")]
-    use crate::sys_common::{backtrace as backtrace_mod};
-
     // If this is a double panic, make sure that we print a backtrace
     // for this panic. Otherwise only print it if logging is enabled.
-    #[cfg(feature = "backtrace")]
-    let log_backtrace = {
-        let panics = update_panic_count(0);
-
-        if panics >= 2 {
-            Some(backtrace::PrintFmt::Full)
-        } else {
-            backtrace_mod::log_enabled()
-        }
+    let backtrace_env = if update_panic_count(0) >= 2 {
+        RustBacktrace::Print(backtrace_rs::PrintFmt::Full)
+    } else {
+        backtrace::rust_backtrace_env()
     };
 
     // The current implementation always returns `Some`.
@@ -190,17 +182,16 @@ fn default_hook(info: &PanicInfo<'_>) {
         let _ = writeln!(err, "thread '{}' panicked at '{}', {}",
                          name, msg, location);
 
-        #[cfg(feature = "backtrace")]
-        {
-            use crate::sync::atomic::{AtomicBool, Ordering};
+        static FIRST_PANIC: AtomicBool = AtomicBool::new(true);
 
-            static FIRST_PANIC: AtomicBool = AtomicBool::new(true);
-
-            if let Some(format) = log_backtrace {
-                let _ = backtrace_mod::print(err, format);
-            } else if FIRST_PANIC.compare_and_swap(true, false, Ordering::SeqCst) {
-                let _ = writeln!(err, "note: run with `RUST_BACKTRACE=1` \
-                                       environment variable to display a backtrace.");
+        match backtrace_env {
+            RustBacktrace::Print(format) => drop(backtrace::print(err, format)),
+            RustBacktrace::Disabled => {}
+            RustBacktrace::RuntimeDisabled => {
+                if FIRST_PANIC.swap(false, Ordering::SeqCst) {
+                    let _ = writeln!(err, "note: run with `RUST_BACKTRACE=1` \
+                                           environment variable to display a backtrace.");
+                }
             }
         }
     };
@@ -226,7 +217,7 @@ pub fn update_panic_count(amt: isize) -> usize {
     PANIC_COUNT.with(|c| {
         let next = (c.get() as isize + amt) as usize;
         c.set(next);
-        return next
+        next
     })
 }
 
@@ -235,10 +226,9 @@ pub use realstd::rt::update_panic_count;
 
 /// Invoke a closure, capturing the cause of an unwinding panic if one occurs.
 pub unsafe fn r#try<R, F: FnOnce() -> R>(f: F) -> Result<R, Box<dyn Any + Send>> {
-    #[allow(unions_with_drop_fields)]
     union Data<F, R> {
-        f: F,
-        r: R,
+        f: ManuallyDrop<F>,
+        r: ManuallyDrop<R>,
     }
 
     // We do some sketchy operations with ownership here for the sake of
@@ -269,7 +259,7 @@ pub unsafe fn r#try<R, F: FnOnce() -> R>(f: F) -> Result<R, Box<dyn Any + Send>>
     let mut any_data = 0;
     let mut any_vtable = 0;
     let mut data = Data {
-        f,
+        f: ManuallyDrop::new(f)
     };
 
     let r = __rust_maybe_catch_panic(do_call::<F, R>,
@@ -279,7 +269,7 @@ pub unsafe fn r#try<R, F: FnOnce() -> R>(f: F) -> Result<R, Box<dyn Any + Send>>
 
     return if r == 0 {
         debug_assert!(update_panic_count(0) == 0);
-        Ok(data.r)
+        Ok(ManuallyDrop::into_inner(data.r))
     } else {
         update_panic_count(-1);
         debug_assert!(update_panic_count(0) == 0);
@@ -292,8 +282,9 @@ pub unsafe fn r#try<R, F: FnOnce() -> R>(f: F) -> Result<R, Box<dyn Any + Send>>
     fn do_call<F: FnOnce() -> R, R>(data: *mut u8) {
         unsafe {
             let data = data as *mut Data<F, R>;
-            let f = ptr::read(&mut (*data).f);
-            ptr::write(&mut (*data).r, f());
+            let data = &mut (*data);
+            let f = ManuallyDrop::take(&mut data.f);
+            data.r = ManuallyDrop::new(f());
         }
     }
 }

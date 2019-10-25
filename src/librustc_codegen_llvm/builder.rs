@@ -52,6 +52,7 @@ const UNNAMED: *const c_char = EMPTY_C_STR.as_ptr();
 
 impl BackendTypes for Builder<'_, 'll, 'tcx> {
     type Value = <CodegenCx<'ll, 'tcx> as BackendTypes>::Value;
+    type Function = <CodegenCx<'ll, 'tcx> as BackendTypes>::Function;
     type BasicBlock = <CodegenCx<'ll, 'tcx> as BackendTypes>::BasicBlock;
     type Type = <CodegenCx<'ll, 'tcx> as BackendTypes>::Type;
     type Funclet = <CodegenCx<'ll, 'tcx> as BackendTypes>::Funclet;
@@ -324,7 +325,7 @@ impl BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
         use syntax::ast::UintTy::*;
         use rustc::ty::{Int, Uint};
 
-        let new_sty = match ty.sty {
+        let new_kind = match ty.kind {
             Int(Isize) => Int(self.tcx.sess.target.isize_ty),
             Uint(Usize) => Uint(self.tcx.sess.target.usize_ty),
             ref t @ Uint(_) | ref t @ Int(_) => t.clone(),
@@ -332,7 +333,7 @@ impl BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
         };
 
         let name = match oop {
-            OverflowOp::Add => match new_sty {
+            OverflowOp::Add => match new_kind {
                 Int(I8) => "llvm.sadd.with.overflow.i8",
                 Int(I16) => "llvm.sadd.with.overflow.i16",
                 Int(I32) => "llvm.sadd.with.overflow.i32",
@@ -347,7 +348,7 @@ impl BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
 
                 _ => unreachable!(),
             },
-            OverflowOp::Sub => match new_sty {
+            OverflowOp::Sub => match new_kind {
                 Int(I8) => "llvm.ssub.with.overflow.i8",
                 Int(I16) => "llvm.ssub.with.overflow.i16",
                 Int(I32) => "llvm.ssub.with.overflow.i32",
@@ -362,7 +363,7 @@ impl BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
 
                 _ => unreachable!(),
             },
-            OverflowOp::Mul => match new_sty {
+            OverflowOp::Mul => match new_kind {
                 Int(I8) => "llvm.smul.with.overflow.i8",
                 Int(I16) => "llvm.smul.with.overflow.i16",
                 Int(I32) => "llvm.smul.with.overflow.i32",

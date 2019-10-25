@@ -213,6 +213,15 @@ fn print_backtrace(backtrace: &mut Backtrace) {
     eprintln!("\n\nAn error occurred in miri:\n{:?}", backtrace);
 }
 
+impl From<ErrorHandled> for InterpErrorInfo<'tcx> {
+    fn from(err: ErrorHandled) -> Self {
+        match err {
+            ErrorHandled::Reported => err_inval!(ReferencedConstant),
+            ErrorHandled::TooGeneric => err_inval!(TooGeneric),
+        }.into()
+    }
+}
+
 impl<'tcx> From<InterpError<'tcx>> for InterpErrorInfo<'tcx> {
     fn from(kind: InterpError<'tcx>) -> Self {
         let backtrace = match env::var("RUSTC_CTFE_BACKTRACE") {
@@ -313,6 +322,9 @@ impl<O: fmt::Debug> fmt::Debug for PanicInfo<O> {
     }
 }
 
+/// Error information for when the program we executed turned out not to actually be a valid
+/// program. This cannot happen in stand-alone Miri, but it can happen during CTFE/ConstProp
+/// where we work on generic code or execution does not have all information available.
 #[derive(Clone, RustcEncodable, RustcDecodable, HashStable)]
 pub enum InvalidProgramInfo<'tcx> {
     /// Resolution can fail if we are in a too generic context.
@@ -342,6 +354,7 @@ impl fmt::Debug for InvalidProgramInfo<'tcx> {
     }
 }
 
+/// Error information for when the program caused Undefined Behavior.
 #[derive(Clone, RustcEncodable, RustcDecodable, HashStable)]
 pub enum UndefinedBehaviorInfo {
     /// Free-form case. Only for errors that are never caught!
@@ -350,6 +363,8 @@ pub enum UndefinedBehaviorInfo {
     UbExperimental(String),
     /// Unreachable code was executed.
     Unreachable,
+    /// An enum discriminant was set to a value which was outside the range of valid values.
+    InvalidDiscriminant(ScalarMaybeUndef),
 }
 
 impl fmt::Debug for UndefinedBehaviorInfo {
@@ -360,16 +375,25 @@ impl fmt::Debug for UndefinedBehaviorInfo {
                 write!(f, "{}", msg),
             Unreachable =>
                 write!(f, "entered unreachable code"),
+            InvalidDiscriminant(val) =>
+                write!(f, "encountered invalid enum discriminant {}", val),
         }
     }
 }
 
+/// Error information for when the program did something that might (or might not) be correct
+/// to do according to the Rust spec, but due to limitations in the interpreter, the
+/// operation could not be carried out. These limitations can differ between CTFE and the
+/// Miri engine, e.g., CTFE does not support casting pointers to "real" integers.
+///
+/// Currently, we also use this as fall-back error kind for errors that have not been
+/// categorized yet.
 #[derive(Clone, RustcEncodable, RustcDecodable, HashStable)]
 pub enum UnsupportedOpInfo<'tcx> {
     /// Free-form case. Only for errors that are never caught!
     Unsupported(String),
 
-    // -- Everything below is not classified yet --
+    // -- Everything below is not categorized yet --
     FunctionAbiMismatch(Abi, Abi),
     FunctionArgMismatch(Ty<'tcx>, Ty<'tcx>),
     FunctionRetMismatch(Ty<'tcx>, Ty<'tcx>),
@@ -380,7 +404,6 @@ pub enum UnsupportedOpInfo<'tcx> {
     InvalidMemoryAccess,
     InvalidFunctionPointer,
     InvalidBool,
-    InvalidDiscriminant(ScalarMaybeUndef),
     PointerOutOfBounds {
         ptr: Pointer,
         msg: CheckInAllocMsg,
@@ -465,8 +488,6 @@ impl fmt::Debug for UnsupportedOpInfo<'tcx> {
                 write!(f, "incorrect alloc info: expected size {} and align {}, \
                            got size {} and align {}",
                     size.bytes(), align.bytes(), size2.bytes(), align2.bytes()),
-            InvalidDiscriminant(val) =>
-                write!(f, "encountered invalid enum discriminant {}", val),
             InvalidMemoryAccess =>
                 write!(f, "tried to access memory through an invalid pointer"),
             DanglingPointerDeref =>
@@ -536,6 +557,8 @@ impl fmt::Debug for UnsupportedOpInfo<'tcx> {
     }
 }
 
+/// Error information for when the program exhausted the resources granted to it
+/// by the interpreter.
 #[derive(Clone, RustcEncodable, RustcDecodable, HashStable)]
 pub enum ResourceExhaustionInfo {
     /// The stack grew too big.

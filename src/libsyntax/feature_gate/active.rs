@@ -402,9 +402,6 @@ declare_features! (
     /// Allows infering `'static` outlives requirements (RFC 2093).
     (active, infer_static_outlives_requirements, "1.26.0", Some(54185), None),
 
-    /// Allows macro invocations in `extern {}` blocks.
-    (active, macros_in_extern, "1.27.0", Some(49476), None),
-
     /// Allows accessing fields of unions inside `const` functions.
     (active, const_fn_union, "1.27.0", Some(51909), None),
 
@@ -489,9 +486,6 @@ declare_features! (
     /// Allows the user of associated type bounds.
     (active, associated_type_bounds, "1.34.0", Some(52662), None),
 
-    /// Attributes on formal function params.
-    (active, param_attrs, "1.36.0", Some(60406), None),
-
     /// Allows calling constructor functions in `const fn`.
     (active, const_constructor, "1.37.0", Some(61456), None),
 
@@ -525,6 +519,18 @@ declare_features! (
     /// Allows the use of or-patterns (e.g., `0 | 1`).
     (active, or_patterns, "1.38.0", Some(54883), None),
 
+    /// Allows the definition of `const extern fn` and `const unsafe extern fn`.
+    (active, const_extern_fn, "1.40.0", Some(64926), None),
+
+    // Allows the use of raw-dylibs (RFC 2627).
+    (active, raw_dylib, "1.40.0", Some(58713), None),
+
+    /// Enable accurate caller location reporting during panic (RFC 2091).
+    (active, track_caller, "1.40.0", Some(47809), None),
+
+    /// Non-object safe trait objects safe to use but cannot be created in safe rust
+    (active, object_safe_for_dispatch, "1.40.0", Some(43561), None),
+
     // -------------------------------------------------------------------------
     // feature-group-end: actual feature gates
     // -------------------------------------------------------------------------
@@ -539,4 +545,6 @@ pub const INCOMPLETE_FEATURES: &[Symbol] = &[
     sym::const_generics,
     sym::or_patterns,
     sym::let_chains,
+    sym::raw_dylib,
+    sym::track_caller,
 ];

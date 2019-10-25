@@ -238,7 +238,6 @@
 #![feature(array_error_internals)]
 #![feature(asm)]
 #![feature(associated_type_bounds)]
-#![cfg_attr(bootstrap, feature(bind_by_move_pattern_guards))]
 #![feature(box_syntax)]
 #![feature(c_variadic)]
 #![feature(cfg_target_has_atomic)]
@@ -276,9 +275,10 @@
 #![feature(link_args)]
 #![feature(linkage)]
 #![feature(log_syntax)]
+#![feature(manually_drop_take)]
+#![feature(matches_macro)]
 #![feature(maybe_uninit_ref)]
 #![feature(maybe_uninit_slice)]
-#![feature(mem_take)]
 #![feature(needs_panic_runtime)]
 #![feature(never_type)]
 #![feature(nll)]
@@ -299,6 +299,7 @@
 #![feature(slice_concat_ext)]
 #![feature(slice_internals)]
 #![feature(slice_patterns)]
+#![feature(specialization)]
 #![feature(staged_api)]
 #![feature(std_internals)]
 #![feature(stdsimd)]
@@ -306,7 +307,6 @@
 #![feature(str_internals)]
 #![feature(test)]
 #![feature(thread_local)]
-#![feature(todo_macro)]
 #![feature(toowned_clone_into)]
 #![feature(trace_macros)]
 #![feature(try_reserve)]
@@ -528,6 +528,7 @@ pub use core::{
     writeln,
     // Unstable
     todo,
+    matches,
 };
 
 // Re-export built-in macros defined through libcore.

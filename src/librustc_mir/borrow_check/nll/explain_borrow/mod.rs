@@ -17,6 +17,7 @@ use syntax_pos::Span;
 
 mod find_use;
 
+#[derive(Debug)]
 pub(in crate::borrow_check) enum BorrowExplanation {
     UsedLater(LaterUseKind, Span),
     UsedLaterInLoop(LaterUseKind, Span),
@@ -35,7 +36,7 @@ pub(in crate::borrow_check) enum BorrowExplanation {
     Unexplained,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(in crate::borrow_check) enum LaterUseKind {
     TraitCapture,
     ClosureCapture,
@@ -95,7 +96,7 @@ impl BorrowExplanation {
                 should_note_order,
             } => {
                 let local_decl = &body.local_decls[dropped_local];
-                let (dtor_desc, type_desc) = match local_decl.ty.sty {
+                let (dtor_desc, type_desc) = match local_decl.ty.kind {
                     // If type is an ADT that implements Drop, then
                     // simplify output by reporting just the ADT name.
                     ty::Adt(adt, _substs) if adt.has_dtor(tcx) && !adt.is_box() => (
@@ -457,7 +458,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
     /// True if an edge `source -> target` is a backedge -- in other words, if the target
     /// dominates the source.
     fn is_back_edge(&self, source: Location, target: Location) -> bool {
-        target.dominates(source, &self.body.dominators())
+        target.dominates(source, &self.dominators)
     }
 
     /// Determine how the borrow was later used.
@@ -612,7 +613,7 @@ impl<'cx, 'tcx> MirBorrowckCtxt<'cx, 'tcx> {
                             {
                                 debug!("was_captured_by_trait_object: ty={:?}", ty);
                                 // Check the type for a trait object.
-                                return match ty.sty {
+                                return match ty.kind {
                                     // `&dyn Trait`
                                     ty::Ref(_, ty, _) if ty.is_trait() => true,
                                     // `Box<dyn Trait>`
